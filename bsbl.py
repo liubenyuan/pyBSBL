@@ -166,13 +166,13 @@ class bo:
         blk_len_list, self.is_equal_block = block_parse(blk_start_loc, N)
         # init variables
         nblock      = blk_start_loc.shape[0]
-        w        = np.zeros(N,dtype='float')
+        w           = np.zeros(N,dtype='float')
         Sigma0      = [np.identity(blk_len_list[i]) for i in range(nblock)]
         Sigma_w     = [np.identity(blk_len_list[i]) for i in range(nblock)]
         Cov_x       = [np.identity(blk_len_list[i]) for i in range(nblock)]
         B           = [np.identity(blk_len_list[i]) for i in range(nblock)]
         invB        = [np.identity(blk_len_list[i]) for i in range(nblock)]
-        block_slice = [blk_start_loc[i] + np.arange(blk_len_list[i]) for i in xrange(nblock)]
+        block_slice = np.array([blk_start_loc[i] + np.arange(blk_len_list[i]) for i in xrange(nblock)])
         gamma       = np.ones(nblock, dtype='float')
         HX          = [np.identity(blk_len_list[i]) for i in range(nblock)]
         Hy          = [np.zeros(blk_len_list[i]) for i in range(nblock)]
@@ -247,13 +247,18 @@ class bo:
             #================= Check stopping conditions, eyc. ==============
             dmu = (np.abs(w_old - w)).max(0); # only SMV currently
             if (dmu < self.epsilon):
-                break;
+                break
             if (count >= self.max_iters):
-                break;
+                break
         # exit
         self.count = count + 1
+        self.gamma = gamma
+        self.index = index
         # let's convert the backyard:
-        return w * self.scale
+        w_ret = np.zeros(N)
+        relevant_slice = ravel_list(block_slice[index])
+        w_ret[relevant_slice] = w[relevant_slice]
+        return w_ret * self.scale
         
     # print zero-vector warning
     def print_zero_vector(self):
@@ -264,8 +269,42 @@ class bo:
         print ('Try smaller values of prune_gamma and epsilon or normalize y')
         print ('--------------------------------------------------------------')
         
-
-# 
+#
+def logobj(s,q,A,L):
+    As = np.dot(A, s)
+    Aq = np.dot(A, q)
+    ml = np.log(np.abs(lp.det(np.identity(L) + As))) - \
+	    np.dot(np.dot(q.T.conj(), lp.inv(np.identity(L) + As)), Aq)
+    return ml
+    
+#
+def logobj_vector(theta, index, S, Q, A, Am):
+    s = S
+    q = Q
+    for i in np.argwhere(index):
+        invDenom = lp.inv(np.identity(Am[i].shape[0]) - S[i]*Am[i])
+        s[i] = np.dot(invDenom, S[i])
+        q[i] = np.dot(invDenom, Q[i])
+    #
+    candidate_new = theta > 0.
+    #
+    candidate_add = candidate_new & (~index)
+    candidate_del = (~candidate_new) & index
+    candidate_est = candidate_new & index
+    # init
+    ml = np.inf * np.ones(theta.size, dtype='float')
+    # add
+    for i in np.argwhere(candidate_add):
+        ml[i] = logobj(s[i], q[i], A[i], A[i].shape[0])
+    # del
+    for i in np.argwhere(candidate_del):
+        ml[i] = -logobj(s[i], q[i], A[i], A[i].shape[0])
+    # re-estimate
+    for i in np.argwhere(candidate_est):
+        ml[i] = logobj(s[i], q[i], A[i], A[i].shape[0]) - \
+                logobj(s[i], q[i], Am[i], Am[i].shape[0])
+    return ml
+    
 class fm:
     """
     BSBL-FM : fast marginalized bsbl algos
@@ -335,5 +374,62 @@ class fm:
             blk_start_loc = np.arange(0,N,blkLen)
         blk_len_list, self.is_equal_block = block_parse(blk_start_loc, N)
         # init variables
+        beta        = 1. / self.lamb
+        nblock      = blk_start_loc.shape[0]
+        block_slice = [blk_start_loc[i] + np.arange(blk_len_list[i]) for i in range(nblock)]
+        Phi         = [X[:,block_slice[i]] for i in range(nblock)]
+        S           = [np.dot(beta*Phi[i].T.conj(), Phi[i]) for i in range(nblock)]
+        Q           = [np.dot(beta*Phi[i].T.conj(), y) for i in range(nblock)]
+        w           = np.zeros(N,dtype='float')
+        #
+        # start from NULL, decide which one to add ->
+        invS  = [lp.inv(S[i]) for i in range(nblock)]
+        A     = [np.dot(np.dot(invS[i], (np.dot(Q[i], Q[i].T.conj()) - S[i])), invS[i]) for i in range(nblock)]
+        Am    = [np.zeros(A[i].shape) for i in range(nblock)]
+        theta = np.zeros(nblock,dtype=float)
+        for i in range(nblock):
+            theta[i] = 1.0/blk_len_list[i] * np.real(A[i].trace())
+            A[i]  = np.identity(blk_len_list[i]) * theta[i]
+        #
+        #
+        index = np.zeros(nblock, dtype='bool')
+        gamma = np.zeros(nblock, dtype='float')
+        ML    = np.zeros(self.max_iters,dtype='float')
+        #
+        # loops
+        for count in range(self.max_iters):
+            ml = logobj_vector(theta, index, S, Q, A, Am)
+            idx = np.argmin(0)
+            #
+            if index[idx]==True:
+                if theta[idx]>0.:
+                    self.estimate()
+                else:
+                    self.delete()
+            else:
+                self.add()
+            
+            # check convergence
+            ML[count] = ml.min()
+            if (ML[count] >= 0):
+                break
+            if count>1:
+                if (np.abs(ML[count] - ML[count-1]) < np.abs(ML[count] - ML[0])*self.epsilon):
+                    break
+        #
+        self.count = count
+        self.gamma = gamma
+        # exit
+        return w
     
+    #
+    def add(self):
+        return 1
+     
+    #
+    def delete(self):
+        return 1
     
+    #
+    def estimate(self):
+        return 1
