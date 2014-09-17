@@ -23,7 +23,7 @@ import scipy.io as io
 import scipy.fftpack as sf
 import matplotlib.pyplot as plt
 #
-sys.path.append('../bsbl')
+sys.path.append('../')
 import bsbl
 #import bsbl.fm
 

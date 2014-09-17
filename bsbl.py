@@ -54,6 +54,17 @@ from __future__ import print_function
 import numpy as np
 import scipy.linalg as lp
 
+# print parameters
+def print_vars(clf):
+    print ('----------------------------INFO------------------------------')
+    print ('apply lambda learning rule (learn_lambda) = %d' % clf.learn_lambda)
+    print ('initial guess of noise      (lambda_init) = %g' % clf.lamb)
+    print ('BSBL algorithm exit criterion   (epsilon) = %g' % clf.epsilon)
+    print ('BSBL maximum iterations       (max_iters) = %d' % clf.max_iters)
+    print ('intra-block correlation      (learn_type) = %d' % clf.learn_type)
+    print ('Gamma pruning rules         (prune_gamma) = %g' % clf.prune_gamma)
+    print ('--------------------------------------------------------------')
+        
 # vector to column 2D vector
 def v2m(v):
     return v.reshape((v.shape[0],1))
@@ -85,44 +96,49 @@ def coeff_r(Cov, gamma, index):
         r = 0.99*np.sign(r)
     return r
 
+#
 class bo:
     """
-    # BSBL-BO : Bound Optimization Algos of BSBL framework
-    #
-    # Recover block sparse signal (1D) exploiting intra-block correlation, 
-    # given the block partition.
-    #
-    #   The algorithm solves the inverse problem for the block sparse
-    #               model with known block partition:
-    #                        y = X * w + v
-    #
-    #   X : array, shape = (n_samples, n_features)
-    #   Training vectors.
-    #
-    #   y : array, shape = (n_samples)
-    #   Target values for training vectors
-    #
-    #   w : array, shape = (n_features)
-    #   sparse/block sparse weight vector
-    #
-    #   'learn_type'   : learn_type = 0: Ignore intra-block correlation
-    #                    learn_type = 1: Exploit intra-block correlation 
-    #                    [ Default: learn_type = 1 ]
-    #   'verbose'      : debuging information.
-    #   'epsilon'      : convergence criterion
-    #   'prune_gamma'  : threshold to prune out small gamma_i 
-    #                    (generally, 10^{-3} or 10^{-2})
-    #   'max_iters'    : Maximum number of iterations.
-    #                    [ Default value: max_iters = 500 ]
-    #   'learn_lambda' : (1) if (SNR<10dB), learn_lambda=1
-    #                    (2) if (SNR>10dB), learn_lambda=2
-    #                    (3) if noiseless, learn_lambda=0
-    #                    [ Default value: learn_lambda=2]
-    #
+    BSBL-BO : Bound Optimization Algos of BSBL framework
+    
+    Recover block sparse signal (1D) exploiting intra-block correlation, 
+    given the block partition.
+    
+    The algorithm solves the inverse problem for the block sparse
+                model with known block partition:
+                         y = X * w + v
+    Variables
+    ---------
+    X : array, shape = (n_samples, n_features)
+          Training vectors.
+    
+    y : array, shape = (n_samples)
+        Target values for training vectors
+   
+    w : array, shape = (n_features)
+        sparse/block sparse weight vector
+    
+    Parameters
+    ----------
+    'learn_type'   : learn_type = 0: Ignore intra-block correlation
+                     learn_type = 1: Exploit intra-block correlation 
+                     [ Default: learn_type = 1 ]
+    'verbose'      : debuging information.
+    'epsilon'      : convergence criterion
+    'prune_gamma'  : threshold to prune out small gamma_i 
+                     (generally, 10^{-3} or 10^{-2})
+    'max_iters'    : Maximum number of iterations.
+                     [ Default value: max_iters = 500 ]
+    'learn_lambda' : (1) if (SNR<10dB), learn_lambda=1
+                     (2) if (SNR>10dB), learn_lambda=2
+                     (3) if noiseless, learn_lambda=0
+                     [ Default value: learn_lambda=2 ]
+    'lambda_init'  : initial guess of the noise variance
+                     [ Default value: lambda_init=1e-2 ]
     """
 
     # constructor
-    def __init__(self, learn_lambda=2,
+    def __init__(self, learn_lambda=2, lambda_init=1e-2,
                   epsilon=1e-8, max_iters=500, verbose=0,
                   learn_type=1, prune_gamma=1e-2):
         self.learn_lambda = learn_lambda
@@ -131,14 +147,17 @@ class bo:
         self.verbose = verbose
         self.learn_type = learn_type
         self.prune_gamma = prune_gamma
+        self.lamb = lambda_init
         #
         if verbose:
-            self.print_vars()
+            print_vars(self)
     
     # fit y                 
     def fit_transform(self, X, y, blk_start_loc=None):
         #
-        self.lamb = 1e-2 * y.std()
+        self.scale = y.std()
+        y = y / self.scale
+        #
         M, N = X.shape
         # automatically set block partition
         if blk_start_loc==None:
@@ -234,17 +253,7 @@ class bo:
         # exit
         self.count = count + 1
         # let's convert the backyard:
-        return w
-        
-    # print parameters
-    def print_vars(self):
-        print ('----------------------------INFO------------------------------')
-        print ('apply lambda learning rule (learn_lambda) = %d' % self.learn_lambda)
-        print ('BSBL algorithm exit criterion   (epsilon) = %g' % self.epsilon)
-        print ('BSBL maximum iterations       (max_iters) = %d' % self.max_iters)
-        print ('intra-block correlation      (learn_type) = %d' % self.learn_type)
-        print ('Gamma pruning rules         (prune_gamma) = %g' % self.prune_gamma)
-        print ('--------------------------------------------------------------')
+        return w * self.scale
         
     # print zero-vector warning
     def print_zero_vector(self):
@@ -256,23 +265,75 @@ class bo:
         print ('--------------------------------------------------------------')
         
 
-# BSBL-FM : fast marginalized bsbl algos
+# 
 class fm:
+    """
+    BSBL-FM : fast marginalized bsbl algos
     
-        # constructor
-    def __init__(self, learn_lambda=2, y_scale=0.9,
-                  epsilon=1e-8, max_iters=500, verbose=0,
+    Recover block sparse signal (1D) exploiting intra-block correlation, 
+    given the block partition.
+    
+    The algorithm solves the inverse problem for the block sparse
+                model with known block partition:
+                         y = X * w + v
+    
+    Variables
+    ---------
+    X : array, shape = (n_samples, n_features)
+        Training vectors.
+    
+    y : array, shape = (n_samples)
+        Target values for training vectors
+    
+    w : array, shape = (n_features)
+        sparse/block sparse weight vector
+    
+    Parameters
+    ----------
+    'learn_type'   : learn_type = 0: Ignore intra-block correlation
+                     learn_type = 1: Exploit intra-block correlation 
+                     [ Default: learn_type = 1 ]
+    'verbose'      : debuging information.
+    'epsilon'      : convergence criterion.
+    'prune_gamma'  : threshold to prune out small gamma_i 
+                     (generally, 10^{-3} or 10^{-2})
+    'max_iters'    : Maximum number of iterations.
+                     [ Default value: max_iters = 500 ]
+    'learn_lambda' : (1) if (SNR<10dB), learn_lambda=1
+                     (2) if (SNR>10dB), learn_lambda=2
+                     (3) if noiseless, learn_lambda=0
+                     [ Default value: learn_lambda=2 ]
+    'lambda_init'  : initial guess of the noise variance
+                     [ Default value: lambda_init=1e-2 ]
+    """
+    
+    # constructor
+    def __init__(self, learn_lambda=2, lambda_init=1e-2,
+                  epsilon=1e-4, max_iters=500, verbose=0,
                   learn_type=1, prune_gamma=1e-2):
         self.learn_lambda = learn_lambda
-        self.y_scale = y_scale
         self.epsilon = epsilon
         self.max_iters = max_iters
         self.verbose = verbose
         self.learn_type = learn_type
         self.prune_gamma = prune_gamma
-        self.lamb = y_scale * 1e-2
+        self.lamb = lambda_init
         #
         if verbose:
-            self.print_vars()
+            print_vars(self)
+            
+    # fit y                 
+    def fit_transform(self, X, y, blk_start_loc=None):
+        #
+        self.scale = y.std()
+        y = y / self.scale
+        #
+        M, N = X.shape
+        # automatically set block partition
+        if blk_start_loc==None:
+            blkLen = int(N/16.)
+            blk_start_loc = np.arange(0,N,blkLen)
+        blk_len_list, self.is_equal_block = block_parse(blk_start_loc, N)
+        # init variables
     
     
