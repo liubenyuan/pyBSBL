@@ -69,6 +69,10 @@ def print_vars(clf):
 def v2m(v):
     return v.reshape((v.shape[0],1))
 
+# M = A*B*C
+def dot3(A,B,C):
+    return np.dot(np.dot(A,B), C)
+
 # ravel list of arrays
 def ravel_list(d):
     r = np.array([], dtype='int')
@@ -83,7 +87,7 @@ def block_parse(blk_start_loc, N):
     return blk_len_list, is_equal_block
 
 # exploit AR(1) correlation in Covariance matrices
-def coeff_r(Cov, gamma, index):
+def coeff_r(Cov, gamma, index, scale=1.1, r_init=0.90, r_thd=0.999):
     r0 = 0.
     r1 = 0.
     for i in index:
@@ -91,11 +95,21 @@ def coeff_r(Cov, gamma, index):
         r0 += temp.trace().mean()
         r1 += temp.trace(offset=1).mean()
     # this method tend to under estimate the correlation
-    r = 1.1 * r1/r0
-    if (np.abs(r) >= 0.99):
-        r = 0.99*np.sign(r)
+    if np.size(index) == 0:
+        r = r_init
+    else:
+        r = scale * r1/(r0 + 1e-8)
+    if (np.abs(r) >= r_thd):
+        r = r_thd * np.sign(r)
     return r
 
+# generate toeplitz matrix
+def gen_toeplitz(r,l):
+	jup = np.arange(l)
+	bs = r**jup
+	B = lp.toeplitz(bs)
+	return B
+ 
 #
 class bo:
     """
@@ -269,41 +283,28 @@ class bo:
         print ('Try smaller values of prune_gamma and epsilon or normalize y')
         print ('--------------------------------------------------------------')
         
-#
+# compute logobj function for BSBL-FM
 def logobj(s,q,A,L):
     As = np.dot(A, s)
     Aq = np.dot(A, q)
     ml = np.log(np.abs(lp.det(np.identity(L) + As))) - \
 	    np.dot(np.dot(q.T.conj(), lp.inv(np.identity(L) + As)), Aq)
     return ml
-    
-#
-def logobj_vector(theta, index, S, Q, A, Am):
-    s = S
-    q = Q
-    for i in np.argwhere(index):
-        invDenom = lp.inv(np.identity(Am[i].shape[0]) - S[i]*Am[i])
-        s[i] = np.dot(invDenom, S[i])
-        q[i] = np.dot(invDenom, Q[i])
+        
+# extract the ith block index from current basis
+def extract_segment(idx, basis_book, blk_len_list):
+    N = sum(blk_len_list[basis_book])
+    istart = 0
+    for i in basis_book:
+        if (i == idx):
+            seg = np.arange(istart, istart+blk_len_list[i])
+            break;
+        istart += blk_len_list[i]
     #
-    candidate_new = theta > 0.
-    #
-    candidate_add = candidate_new & (~index)
-    candidate_del = (~candidate_new) & index
-    candidate_est = candidate_new & index
-    # init
-    ml = np.inf * np.ones(theta.size, dtype='float')
-    # add
-    for i in np.argwhere(candidate_add):
-        ml[i] = logobj(s[i], q[i], A[i], A[i].shape[0])
-    # del
-    for i in np.argwhere(candidate_del):
-        ml[i] = -logobj(s[i], q[i], A[i], A[i].shape[0])
-    # re-estimate
-    for i in np.argwhere(candidate_est):
-        ml[i] = logobj(s[i], q[i], A[i], A[i].shape[0]) - \
-                logobj(s[i], q[i], Am[i], Am[i].shape[0])
-    return ml
+    seg_others = np.ones(N, dtype='bool')
+    seg_others[seg] = False
+    return seg, seg_others
+        
     
 class fm:
     """
@@ -366,61 +367,186 @@ class fm:
         #
         self.scale = y.std()
         y = y / self.scale
-        #
         M, N = X.shape
         # automatically set block partition
         if blk_start_loc==None:
             blkLen = int(N/16.)
             blk_start_loc = np.arange(0,N,blkLen)
         blk_len_list, self.is_equal_block = block_parse(blk_start_loc, N)
+        #
         # init variables
         beta        = 1. / self.lamb
         nblock      = blk_start_loc.shape[0]
-        block_slice = [blk_start_loc[i] + np.arange(blk_len_list[i]) for i in range(nblock)]
+        block_slice = np.array([blk_start_loc[i] + np.arange(blk_len_list[i]) for i in range(nblock)])
         Phi         = [X[:,block_slice[i]] for i in range(nblock)]
         S           = [np.dot(beta*Phi[i].T.conj(), Phi[i]) for i in range(nblock)]
         Q           = [np.dot(beta*Phi[i].T.conj(), y) for i in range(nblock)]
-        w           = np.zeros(N,dtype='float')
+        index       = np.zeros(nblock, dtype='bool')
+        gamma       = np.zeros(nblock, dtype='float')
+        Am          = [np.zeros(blk_len_list[i]) for i in range(nblock)]
+        self.nblock = nblock
         #
-        # start from NULL, decide which one to add ->
-        invS  = [lp.inv(S[i]) for i in range(nblock)]
-        A     = [np.dot(np.dot(invS[i], (np.dot(Q[i], Q[i].T.conj()) - S[i])), invS[i]) for i in range(nblock)]
-        Am    = [np.zeros(A[i].shape) for i in range(nblock)]
-        theta = np.zeros(nblock,dtype=float)
-        for i in range(nblock):
-            theta[i] = 1.0/blk_len_list[i] * np.real(A[i].trace())
-            A[i]  = np.identity(blk_len_list[i]) * theta[i]
-        #
-        #
-        index = np.zeros(nblock, dtype='bool')
-        gamma = np.zeros(nblock, dtype='float')
-        ML    = np.zeros(self.max_iters,dtype='float')
-        #
+        ml, A, theta = self.logobj_mapping(index, S, Q, Am)
+        idx = ml.argmin(0)
+        if self.verbose: print ('add %d' % idx)
+        # add this basis
+        gamma[idx] = theta[idx]
+        index[idx] = True
+        Am[idx] = A[idx]
+        basis_book = idx
+        # update quantities (Sig,Mu,S,Q,Phiu)
+        #Sigma_ii = lp.inv(lp.inv(Am[idx]) + S[idx])
+        Sigma_ii = np.dot(lp.inv(np.identity(blk_len_list[idx]) + np.dot(Am[idx], S[idx])), Am[idx])
+        Sig      = Sigma_ii
+        Mu       = np.dot(Sigma_ii, Q[idx])
+        Phiu     = Phi[idx]
+        for k in range(nblock):
+            Phi_k = Phi[k]
+            PSP   = dot3(Phiu, Sigma_ii, Phiu.T.conj())
+            S[k]  = S[k] - beta**2*dot3(Phi_k.T.conj(), PSP, Phi_k)
+            Q[k]  = Q[k] - beta*dot3(Phi_k.T.conj(), Phiu, Mu)
         # loops
-        for count in range(self.max_iters):
-            ml = logobj_vector(theta, index, S, Q, A, Am)
-            idx = np.argmin(0)
+        ML = np.zeros(self.max_iters)
+        for count in range(1,self.max_iters):
+            ml, A, theta = self.logobj_mapping(index, S, Q, Am)
+            idx = ml.argmin(0)
             #
-            if index[idx]==True:
-                if theta[idx]>0.:
-                    self.estimate()
-                else:
-                    self.delete()
-            else:
-                self.add()
-            
             # check convergence
-            ML[count] = ml.min()
+            ML[count] = ml[idx]
             if (ML[count] >= 0):
                 break
             if count>1:
                 if (np.abs(ML[count] - ML[count-1]) < np.abs(ML[count] - ML[0])*self.epsilon):
                     break
+            #
+            # operation on basis
+            if index[idx]==True:
+                seg, segc = extract_segment(idx, basis_book, blk_len_list)
+                Sig_j = Sig[:,seg]
+                Sig_jj = Sig[seg,:][:,seg]
+                if theta[idx] > self.prune_gamma:
+                    if self.verbose: print ('re-estimate %d' % idx)
+                    gamma[idx] = theta[idx]
+                    Phiu = X[:, ravel_list(block_slice[basis_book])]
+                    #
+                    Denom = lp.inv(Sig_jj + np.dot(np.dot(Am[idx], lp.inv(Am[idx] - A[idx])), A[idx]))
+                    ki = dot3(Sig_j, Denom, Sig_j.T.conj())
+                    Sig = Sig - ki
+                    Mu = Mu - beta*dot3(ki,Phiu.T.conj(), y)
+                    PKP = dot3(Phiu, ki, Phiu.T.conj())
+                    for k in range(nblock):
+                        Phi_m = Phi[k];
+                        PPKP = np.dot(Phi_m.T.conj(), PKP)
+                        S[k] = S[k] + beta**2*np.dot(PPKP, Phi_m)
+                        Q[k] = Q[k] + beta**2*np.dot(PPKP, y)
+                    Am[idx] = A[idx]
+                else:
+                    if self.verbose: print ('delete %d' % idx)
+                    Am[idx] = np.zeros(Am[idx].shape)
+                    gamma[idx] = 0
+                    index[idx] = False
+                    Phiu = X[:, ravel_list(block_slice[basis_book])]
+                    #
+                    ki = dot3(Sig_j, lp.inv(Sig_jj), Sig_j.T.conj())
+                    Sig = Sig - ki;
+                    Mu = Mu - beta*dot3(ki, Phiu.T.conj(), y)
+                    PKP = dot3(Phiu, ki, Phiu.T.conj())
+                    for k in range(nblock):
+                        Phi_m = Phi[k]
+                        PPKP = np.dot(Phi_m.T.conj(), PKP)
+                        S[k] = S[k] + beta**2*np.dot(PPKP, Phi_m)
+                        Q[k] = Q[k] + beta**2*np.dot(PPKP, y)
+				#
+                    Mu = Mu[segc]
+                    Sig = Sig[:,segc][segc,:]
+                    basis_book = np.delete(basis_book, np.argwhere(basis_book==idx))
+            else:
+                if self.verbose: print ('add %d' % idx)
+                gamma[idx] = theta[idx]
+                Am[idx] = A[idx]
+                index[idx] = True
+                Phi_j = Phi[idx]
+                Phiu = X[:, ravel_list(block_slice[basis_book])]
+                #
+                Sigma_ii = np.dot(lp.inv(np.identity(blk_len_list[idx]) + np.dot(A[idx], S[idx])), A[idx])
+                mu_i = np.dot(Sigma_ii, Q[idx])
+                SPP = np.dot(np.dot(Sig, Phiu.T.conj()), Phi_j)
+                Sigma_11 = Sig + beta**2*np.dot(np.dot(SPP, Sigma_ii), SPP.T.conj())
+                Sigma_12 = -beta*np.dot(SPP, Sigma_ii)
+                Sigma_21 = Sigma_12.T.conj()
+                #
+                mu_1 = Mu - beta*np.dot(SPP, mu_i)
+                e_i = Phi_j - beta*np.dot(Phiu, SPP)
+                ESE = np.dot(np.dot(e_i, Sigma_ii), e_i.T.conj())
+                for k in range(nblock):
+                    Phi_m = Phi[k]
+                    S[k] = S[k] - beta**2*np.dot(np.dot(Phi_m.T.conj(), ESE), Phi_m)
+                    Q[k] = Q[k] - beta*np.dot(np.dot(Phi_m.T.conj(), e_i), mu_i)
+                # adding relevant basis
+                Sig = np.vstack((np.hstack((Sigma_11,Sigma_12)),  \
+        			  		   np.hstack((Sigma_21,Sigma_ii))))
+                Mu = np.r_[mu_1,mu_i]
+                basis_book = np.append(basis_book, idx)
+                
         #
         self.count = count
         self.gamma = gamma
         # exit
-        return w
+        w_ret = np.zeros(N)
+        relevant_slice = ravel_list(block_slice[basis_book])
+        w_ret[relevant_slice] = Mu
+        return w_ret * self.scale
+    
+    #
+    #
+    def logobj_mapping(self, index, S, Q, Am):
+        N = self.nblock
+        s = S
+        q = Q
+        for i in np.argwhere(index):
+            invDenom = lp.inv(np.identity(Am[i].shape[0]) - S[i]*Am[i])
+            s[i] = np.dot(invDenom, S[i])
+            q[i] = np.dot(invDenom, Q[i])
+        #
+        theta = np.zeros(N)
+        A = [np.zeros(S[i].shape) for i in range(N)]
+        for i in range(N):
+            #invSK = lp.inv(s[i])
+            #invSK = np.diag(1./np.diag(s[i]))
+            #A[i] = dot3(invSK, (np.dot(q[i],q[i].T.conj()) - s[i]), invSK)
+            sq = np.dot(s[i], q[i])
+            A[i] = np.dot(sq, sq.T.conj()) - lp.inv(s[i])
+            theta[i] = 1.0/A[i].shape[0] * np.real(A[i].trace())
+        # learn
+        if self.learn_type == 1:
+            r = coeff_r(Am, theta, np.argwhere(index))
+            #r = 0.99
+            if self.is_equal_block:
+                Bc = gen_toeplitz(r, A[0].shape[0])
+                A = [Bc for i in range(N)]
+            else:
+                A = [gen_toeplitz(r, A[i].shape[0]) for i in range(N)]
+        else:
+            A = [np.identity(A[i].shape[0]) * theta[i] for i in range(N)]
+    
+        #
+        candidate_new = theta > self.prune_gamma
+        candidate_add = candidate_new & (~index)
+        candidate_del = (~candidate_new) & index
+        candidate_est = candidate_new & index
+        # init
+        ml = np.inf * np.ones(theta.size, dtype='float')
+        # add
+        for i in np.argwhere(candidate_add):
+            ml[i] = logobj(s[i], q[i], A[i], A[i].shape[0])
+        # del
+        for i in np.argwhere(candidate_del):
+            ml[i] = -logobj(s[i], q[i], A[i], A[i].shape[0])
+        # re-estimate
+        for i in np.argwhere(candidate_est):
+            ml[i] = logobj(s[i], q[i], A[i], A[i].shape[0]) - \
+                    logobj(s[i], q[i], Am[i], Am[i].shape[0])
+        return ml, A, theta
     
     #
     def add(self):

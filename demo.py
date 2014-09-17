@@ -12,18 +12,14 @@ import bsbl
 # problem dimension
 M = 128          # row number of the dictionary matrix 
 N = 256          # column number
-
-blkNum = 6       # nonzero block number
+blkNum = 8       # nonzero block number
 blkLen = 16      # block length
-
-SNR = 15         # Signal-to-noise ratio
+SNR = 20         # Signal-to-noise ratio
 iterNum = 1      # number of experiments (100)
 r = 0.95         # intra-correlation
 
-#
-np.random.seed(1985)
-
 # Generate the known matrix with columns draw uniformly from the surface of a unit hypersphere
+np.random.seed(1985)
 Phi = np.random.randn(M,N)
 for i in range(Phi.shape[1]):
     Phi[:,i] = Phi[:,i] / np.sqrt(np.sum(Phi[:,i]**2))
@@ -60,9 +56,8 @@ y = y_clean + noise
 #======================================================================
 ind = (np.abs(x)>0).nonzero()[0]
 
-#  Benchmark
+# Benchmark
 supt = ind
-print (Phi[:,supt].shape)
 x_ls = np.dot(lp.pinv(Phi[:,supt]), y)
 x0 = np.zeros(N)
 x0[supt] = x_ls
@@ -71,21 +66,27 @@ mse_bench = (lp.norm(x - x0)/lp.norm(x))**2
 
 # BSBL-BO
 clf = bsbl.bo(learn_lambda=1, learn_type=1, lambda_init=1e-3, 
-              epsilon=1e-5, max_iters=200)
+              epsilon=1e-5, max_iters=100, verbose=1)
 x1 = clf.fit_transform(Phi, y, blk_start_loc)
 #
 mse_bo = (lp.norm(x - x1)/lp.norm(x))**2
 
 # BSBL-FM
-
+clf = bsbl.fm(learn_lambda=1, learn_type=1, lambda_init=1e-2,
+              epsilon=1e-4, max_iters=100, verbose=1)
+x2 = clf.fit_transform(Phi, y, blk_start_loc)
+#
+mse_fm = (lp.norm(x - x2)/lp.norm(x))**2
 
 # visualize
 plt.figure()
 plt.plot(x, linewidth=3)
-plt.plot(x0, 'r-', linewidth=2)
-plt.plot(x1, 'g-')
-plt.legend({'MSE (LS) = '+str(mse_bench), 'MSE (BO) = '+str(mse_bo)},
-            loc='lower left')
-plt.axis('tight')
-
-
+plt.plot(x1, 'r-', linewidth=2)
+plt.plot(x1, 'g-', linewidth=0.1)
+plt.plot(x2, 'y-', linewidth=2)
+plt.xlabel('Samples')
+plt.legend(('Original',
+            'MSE (LS) = ' + str(mse_bench),
+            'MSE (BO) = ' + str(mse_bo),
+            'MSE (FM) = ' + str(mse_fm)),
+            loc='top left')

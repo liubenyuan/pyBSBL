@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 
 test.py
+setup.py
 
 # MATLAB extensions
 *.mat
