@@ -1,9 +1,8 @@
 # This demo shows how to set input parameters of BSBL-BO and BSBL-FM
 # for noisy experiments when block partition is known.
 #
-# modified by liubenyuan for the purpose of illustrating the BSBL-BO.py
 #     liubenyuan@gmail.com
-# 
+#
 import numpy as np
 import scipy.linalg as lp
 import matplotlib.pyplot as plt
@@ -12,7 +11,7 @@ import bsbl
 # problem dimension
 M = 128          # row number of the dictionary matrix 
 N = 256          # column number
-blkNum = 8       # nonzero block number
+blkNum = 16       # nonzero block number
 blkLen = 16      # block length
 SNR = 20         # Signal-to-noise ratio
 iterNum = 1      # number of experiments (100)
@@ -56,26 +55,23 @@ y = y_clean + noise
 #======================================================================
 ind = (np.abs(x)>0).nonzero()[0]
 
-# Benchmark
+# 1. Benchmark
 supt = ind
 x_ls = np.dot(lp.pinv(Phi[:,supt]), y)
 x0 = np.zeros(N)
 x0[supt] = x_ls
-#
 mse_bench = (lp.norm(x - x0)/lp.norm(x))**2
 
-# BSBL-BO
+# 2. BSBL-BO
 clf = bsbl.bo(learn_lambda=1, learn_type=1, lambda_init=1e-3, 
               epsilon=1e-5, max_iters=100, verbose=1)
 x1 = clf.fit_transform(Phi, y, blk_start_loc)
-#
 mse_bo = (lp.norm(x - x1)/lp.norm(x))**2
 
-# BSBL-FM
-clf = bsbl.fm(learn_lambda=1, learn_type=1, lambda_init=1e-2,
+# 3. BSBL-FM
+clf = bsbl.fm(learn_lambda=1, learn_type=1, lambda_init=1e-3,
               epsilon=1e-4, max_iters=100, verbose=1)
 x2 = clf.fit_transform(Phi, y, blk_start_loc)
-#
 mse_fm = (lp.norm(x - x2)/lp.norm(x))**2
 
 # visualize
@@ -89,4 +85,4 @@ plt.legend(('Original',
             'MSE (LS) = ' + str(mse_bench),
             'MSE (BO) = ' + str(mse_bo),
             'MSE (FM) = ' + str(mse_fm)),
-            loc='top left')
+            loc='best')
