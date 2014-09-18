@@ -60,8 +60,8 @@ groupStartLoc = np.arange(0,N,blkLen);
 # (0, -1, -10, etc), namely turning off this pruning mechanism in SBL. But
 # when you reconstruct sparse signals, you can use the default value (1e-2).
 # 
-clf = bsbl.fm(verbose=1, learn_type=1, learn_lambda=2, lambda_init=1e-3,
-              prune_gamma=-1, epsilon=1e-8, max_iters=20)
+clf = bsbl.bo(verbose=1, learn_type=1, lambda_init=1e-3, r_init=0.95,
+              prune_gamma=-1, epsilon=1e-8, max_iters=16)
 x1 = clf.fit_transform(Phi, y, blk_start_loc=groupStartLoc)
 #
 mse_bo = 10*np.log10((lp.norm(x - x1)**2)/lp.norm(x)**2)
