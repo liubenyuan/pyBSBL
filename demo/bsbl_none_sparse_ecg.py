@@ -14,6 +14,7 @@
 # http://arxiv.org/pdf/1205.1287v1
 #
 # Author: liubenyuan (liubenyuan@gmail.com)
+#         zhangzhilin (zhilin@ieee.org)
 #
 
 import sys
@@ -60,7 +61,7 @@ groupStartLoc = np.arange(0,N,blkLen);
 # (0, -1, -10, etc), namely turning off this pruning mechanism in SBL. But
 # when you reconstruct sparse signals, you can use the default value (1e-2).
 # 
-clf = bsbl.bo(verbose=1, learn_type=1, lambda_init=1e-3, r_init=0.95,
+clf = bsbl.bo(verbose=1, learn_type=1, lambda_init=1e-3, r_init=0.96,
               prune_gamma=-1, epsilon=1e-8, max_iters=16)
 x1 = clf.fit_transform(Phi, y, blk_start_loc=groupStartLoc)
 #
@@ -94,7 +95,7 @@ print ('BSBL-BO exit on %d loop' % clf.count)
 plt.figure()
 plt.plot(x,linewidth=3)
 plt.plot(x2,'r-')
-plt.title('MSE of BO (directly) is '+ str(mse_bo_dct) + 'dB')
+plt.title('MSE of BO (DCT domain) is '+ str(mse_bo_dct) + 'dB')
 plt.legend({'Original', 'Recovered'})
 
 plt.figure()

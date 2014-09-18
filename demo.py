@@ -76,9 +76,9 @@ mse_fm = (lp.norm(x - x2)/lp.norm(x))**2
 
 # visualize
 plt.figure()
-plt.plot(x, linewidth=3)
+plt.plot(x, linewidth=4)
+plt.plot(x0, 'g-', linewidth=0.5)
 plt.plot(x1, 'r-', linewidth=2)
-plt.plot(x1, 'g-', linewidth=0.1)
 plt.plot(x2, 'y-', linewidth=2)
 plt.xlabel('Samples')
 plt.legend(('Original',
